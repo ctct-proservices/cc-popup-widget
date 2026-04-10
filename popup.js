@@ -9,15 +9,23 @@
         this.config = {
           delay: config.delay || 3000,
           image: config.image || "",
-          formConfig: config.formConfig || null,
+          formConfig: config.formConfig || {},
           formScriptUrl: config.formScriptUrl || "",
           exitIntent: config.exitIntent || false,
           cookieDays: config.cookieDays || 7
         };
   
-        this.injectStyles();
-        this.createModal();
-        this.setupEvents();
+        const run = () => {
+          this.injectStyles();
+          this.createModal();
+          this.setupEvents();
+        };
+  
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", run);
+        } else {
+          run();
+        }
       },
   
       injectStyles() {
@@ -79,15 +87,10 @@
       },
   
       createModal() {
-        // guard (VERY IMPORTANT for file:// and early execution)
-        if (!document.body) {
-          console.error("CCPopup: document.body is not ready yet");
-          return;
-        }
+        if (!document.body) return;
   
         const modal = document.createElement("div");
         modal.className = "cc-modal";
-        modal.id = "cc-modal";
   
         modal.innerHTML = `
           <div class="cc-modal-content">
@@ -103,26 +106,50 @@
   
         document.body.appendChild(modal);
   
-        // now safely query INSIDE modal (scoped, no global DOM risk)
         const container = modal.querySelector(".cc-form");
   
         if (!container) {
-          console.error("CCPopup: .cc-form not found");
+          console.error("CCPopup: form container missing");
           return;
         }
   
-        // required by SharpSpring / marketing script
-        window.ss_form = this.config.formConfig;
+        // ============================
+        // SHARPSPRING COMPATIBLE BLOCK
+        // ============================
   
-        if (this.config.formScriptUrl) {
-          const script = document.createElement("script");
-          script.src = this.config.formScriptUrl;
-          script.async = true;
-          container.appendChild(script);
-        } else {
-          console.warn("CCPopup: formScriptUrl missing");
+        // 1. base object (MUST exist first)
+        window.ss_form = {
+          account: this.config.formConfig.account,
+          formID: this.config.formConfig.formID
+        };
+  
+        // 2. sequential property assignment (IMPORTANT)
+        window.ss_form.width = this.config.formConfig.width || "100%";
+        window.ss_form.domain = this.config.formConfig.domain;
+  
+        if (this.config.formConfig.hidden) {
+          window.ss_form.hidden = this.config.formConfig.hidden;
         }
   
+        if (this.config.formConfig.target_id) {
+          window.ss_form.target_id = this.config.formConfig.target_id;
+        }
+  
+        if (this.config.formConfig.polling) {
+          window.ss_form.polling = this.config.formConfig.polling;
+        }
+  
+        // 3. load SharpSpring script LAST
+        if (this.config.formScriptUrl) {
+          const script = document.createElement("script");
+          script.type = "text/javascript";
+          script.src = this.config.formScriptUrl;
+          script.async = true;
+  
+          container.appendChild(script);
+        }
+  
+        // close handlers
         modal.querySelector(".cc-close").onclick = () => this.close();
   
         modal.onclick = (e) => {
@@ -148,7 +175,6 @@
           }
         };
   
-        // ✅ DOM SAFE INIT (this is the key fix)
         if (document.readyState === "loading") {
           document.addEventListener("DOMContentLoaded", run);
         } else {
