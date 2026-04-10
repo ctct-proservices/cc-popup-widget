@@ -88,44 +88,47 @@
       },
   
       createModal() {
-        if (!document.body) {
-          console.error("CCPopup: document.body not ready");
-          return;
-        }
-  
+        const { styles = {}, layout = {} } = this.config;
+      
+        const imagePosition = layout.imagePosition === "right" ? "row-reverse" : "row";
+        const imageWidth = layout.imageWidth || "40%";
+        const formWidth = layout.formWidth || "60%";
+      
         const modal = document.createElement("div");
         modal.className = "cc-modal";
-  
+      
+        modal.style.background = styles.overlayColor || "rgba(0,0,0,0.5)";
+      
         modal.innerHTML = `
           <div class="cc-modal-content" style="
-          display: flex;
-          flex-direction: ${imagePosition};
-          max-width:800px;
-          margin: 10% auto;
-          background: ${styles.backgroundColor || "#fff"};
-          border-radius: ${styles.borderRadius || "12px"};
-          overflow: hidden;
+            display: flex;
+            flex-direction: ${imagePosition};
+            max-width: 800px;
+            margin: 10% auto;
+            background: ${styles.backgroundColor || "#fff"};
+            border-radius: ${styles.borderRadius || "12px"};
+            overflow: hidden;
           ">
-          <div class="cc-left" style="width: ${imageWidth}">
-          <img src="${this.config.image}" style="width:100%; height:100%; object-fit:cover;" />
-        </div>
-  
-        <div class="cc-right" style="width: ${formWidth}; padding: 20px;">
-          <span class="cc-close" style="float:right; cursor:pointer;">&times;</span>
-          <div id="cc-form"></div>
-        </div>
-  
-      </div>
+            
+            <div class="cc-left" style="width: ${imageWidth}">
+              <img src="${this.config.image}" style="width:100%; height:100%; object-fit:cover;" />
+            </div>
+      
+            <div class="cc-right" style="width: ${formWidth}; padding: 20px;">
+              <span class="cc-close" style="float:right; cursor:pointer;">&times;</span>
+              <div id="cc-form"></div>
+            </div>
+      
+          </div>
         `;
-  
+      
         document.body.appendChild(modal);
-  
+      
         modal.querySelector(".cc-close").onclick = () => this.close();
-  
         modal.onclick = (e) => {
           if (e.target === modal) this.close();
         };
-  
+      
         this.modal = modal;
       },
   
