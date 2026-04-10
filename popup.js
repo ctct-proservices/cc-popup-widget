@@ -103,7 +103,7 @@
             </div>
             <div class="cc-right">
               <span class="cc-close">&times;</span>
-              <div class="cc-form"></div>
+              <div id="cc-form"></div>
             </div>
           </div>
         `;
@@ -123,44 +123,44 @@
       // 🔥 SHARPSPRING-COMPATIBLE FORM LOADER (FIXED)
       // =====================================================
       loadForm() {
-        if (!this.config.formConfig) {
-          console.warn("CCPopup: Missing formConfig");
-          return;
-        }
-  
-        // 1. Create global ss_form FIRST (SharpSpring requirement)
+        const targetId = "cc-form";
+      
+        // 1. Create base object
         window.ss_form = {
           account: this.config.formConfig.account,
           formID: this.config.formConfig.formID
         };
-  
-        // 2. Attach properties EXACTLY like SharpSpring expects
+      
+        // 2. REQUIRED: tell SharpSpring where to render
+        window.ss_form.target_id = targetId;
+      
+        // 3. Other properties
         window.ss_form.width = this.config.formConfig.width || "100%";
         window.ss_form.domain = this.config.formConfig.domain;
-  
+      
         if (this.config.formConfig.hidden) {
           window.ss_form.hidden = this.config.formConfig.hidden;
         }
-  
-        if (this.config.formConfig.target_id) {
-          window.ss_form.target_id = this.config.formConfig.target_id;
-        }
-  
+      
         if (this.config.formConfig.polling) {
           window.ss_form.polling = this.config.formConfig.polling;
         }
-  
-        // 3. Load script into HEAD (CRITICAL FIX)
-        if (this.config.formScriptUrl) {
-          const script = document.createElement("script");
-          script.type = "text/javascript";
-          script.src = this.config.formScriptUrl;
-          script.async = true;
-  
-          document.head.appendChild(script);
-        } else {
-          console.warn("CCPopup: formScriptUrl missing");
+      
+        // 4. ENSURE target exists BEFORE script loads
+        const target = document.getElementById(targetId);
+      
+        if (!target) {
+          console.error("CCPopup: target container not found");
+          return;
         }
+      
+        // 5. Load script AFTER everything is ready
+        const script = document.createElement("script");
+        script.type = "text/javascript";
+        script.src = this.config.formScriptUrl;
+        script.async = true;
+      
+        document.head.appendChild(script);
       },
   
       setupEvents() {
