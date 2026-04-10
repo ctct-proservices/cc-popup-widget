@@ -31,10 +31,10 @@
   
       injectStyles() {
         if (document.getElementById("cc-popup-styles")) return;
-  
+      
         const style = document.createElement("style");
         style.id = "cc-popup-styles";
-  
+      
         style.innerHTML = `
           .cc-modal {
             display: none;
@@ -44,46 +44,38 @@
             top: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0,0,0,0.5);
           }
-  
+      
           .cc-modal-content {
-            background: #fff;
-            margin: 10% auto;
-            max-width: 800px;
-            border-radius: 12px;
-            display: flex;
-            overflow: hidden;
+            position: relative;
           }
-  
+      
+          .cc-close {
+            position: absolute;
+            top: 10px;
+            right: 15px;
+            font-size: 20px;
+            cursor: pointer;
+            z-index: 2;
+          }
+      
           .cc-left img {
             width: 100%;
             height: 100%;
             object-fit: cover;
           }
-  
-          .cc-right {
-            padding: 20px;
-            width: 100%;
-          }
-  
-          .cc-close {
-            float: right;
-            font-size: 20px;
-            cursor: pointer;
-          }
-  
+      
           @media (max-width: 768px) {
             .cc-modal-content {
-              flex-direction: column;
+              flex-direction: column !important;
             }
-  
+      
             .cc-left {
-              display: none;
+              display: none !important;
             }
           }
         `;
-  
+      
         document.head.appendChild(style);
       },
   
