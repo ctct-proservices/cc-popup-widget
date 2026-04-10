@@ -68,23 +68,18 @@
 
       document.body.appendChild(modal);
 
-      // Inject form safely AFTER modal is in DOM
-      const container = document.getElementById("cc-form");
-      
-      if (!container) {
-        console.error("cc-form container not found");
-        return;
-      }
-      
-      // Create ss_form config
-      window.ss_form = this.config.formConfig;
-      
-      // Load external script
-      const s = document.createElement("script");
-      s.src = this.config.formScriptUrl;
-      s.async = true;
-      
-      container.appendChild(s);
+setTimeout(() => {
+  const container = document.getElementById("cc-form");
+  if (!container) return;
+
+  window.ss_form = this.config.formConfig;
+
+  const s = document.createElement("script");
+  s.src = this.config.formScriptUrl;
+  s.async = true;
+
+  container.appendChild(s);
+}, 0);
     },
 
     setupEvents() {
