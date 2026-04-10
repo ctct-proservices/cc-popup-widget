@@ -19,6 +19,7 @@
           this.injectStyles();
           this.createModal();
           this.setupEvents();
+          this.loadForm(); // 🔥 moved into its own safe loader
         };
   
         if (document.readyState === "loading") {
@@ -87,7 +88,10 @@
       },
   
       createModal() {
-        if (!document.body) return;
+        if (!document.body) {
+          console.error("CCPopup: document.body not ready");
+          return;
+        }
   
         const modal = document.createElement("div");
         modal.className = "cc-modal";
@@ -106,24 +110,31 @@
   
         document.body.appendChild(modal);
   
-        const container = modal.querySelector(".cc-form");
+        modal.querySelector(".cc-close").onclick = () => this.close();
   
-        if (!container) {
-          console.error("CCPopup: form container missing");
+        modal.onclick = (e) => {
+          if (e.target === modal) this.close();
+        };
+  
+        this.modal = modal;
+      },
+  
+      // =====================================================
+      // 🔥 SHARPSPRING-COMPATIBLE FORM LOADER (FIXED)
+      // =====================================================
+      loadForm() {
+        if (!this.config.formConfig) {
+          console.warn("CCPopup: Missing formConfig");
           return;
         }
   
-        // ============================
-        // SHARPSPRING COMPATIBLE BLOCK
-        // ============================
-  
-        // 1. base object (MUST exist first)
+        // 1. Create global ss_form FIRST (SharpSpring requirement)
         window.ss_form = {
           account: this.config.formConfig.account,
           formID: this.config.formConfig.formID
         };
   
-        // 2. sequential property assignment (IMPORTANT)
+        // 2. Attach properties EXACTLY like SharpSpring expects
         window.ss_form.width = this.config.formConfig.width || "100%";
         window.ss_form.domain = this.config.formConfig.domain;
   
@@ -139,24 +150,17 @@
           window.ss_form.polling = this.config.formConfig.polling;
         }
   
-        // 3. load SharpSpring script LAST
+        // 3. Load script into HEAD (CRITICAL FIX)
         if (this.config.formScriptUrl) {
           const script = document.createElement("script");
           script.type = "text/javascript";
           script.src = this.config.formScriptUrl;
           script.async = true;
   
-          container.appendChild(script);
+          document.head.appendChild(script);
+        } else {
+          console.warn("CCPopup: formScriptUrl missing");
         }
-  
-        // close handlers
-        modal.querySelector(".cc-close").onclick = () => this.close();
-  
-        modal.onclick = (e) => {
-          if (e.target === modal) this.close();
-        };
-  
-        this.modal = modal;
       },
   
       setupEvents() {
