@@ -621,7 +621,7 @@
               // wait before enabling
               setTimeout(() => {
                 enabled = true;
-              }, 5000);
+              }, this.config.exitIntentDelay || 15000);
       
               document.addEventListener("mouseout", (e) => {
       
