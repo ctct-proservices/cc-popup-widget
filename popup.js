@@ -1082,8 +1082,10 @@ class CCPopupInstance {
         modal.querySelector(".cc-close").onclick =
             () => this.close();
         
-        modal.querySelector(".footerClosePopupBtn").onclick=
+            if (this.footerClosePopupButton) {
+                modal.querySelector(".footerClosePopupBtn").onclick=
             () => this.close();
+            }
 
 
         modal.onclick = (e) => {
