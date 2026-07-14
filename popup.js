@@ -1,4 +1,3 @@
-
 (function(window, document) {
     const STORAGE_KEYS = {
     ACTIVE_TAB: "cc_popup_active_tab",
@@ -12,6 +11,35 @@ const SESSION = {
     rendering: false
 };
 
+function domainAllowed(host, allowedDomains) {
+
+return allowedDomains.some(domain => {
+
+    domain = domain.toLowerCase();
+    host = host.toLowerCase();
+
+    // Exact match
+    if (host === domain) {
+        return true;
+    }
+
+    // Wildcard (*.example.com)
+    if (domain.startsWith("*.")) {
+
+        const root = domain.substring(2);
+
+        return (
+            host === root ||
+            host.endsWith("." + root)
+        );
+
+    }
+
+    return false;
+
+});
+
+}
 
 
 class CCPopupInstance {
@@ -106,7 +134,17 @@ class CCPopupInstance {
             */
     
             layout: config.layout || {},
-    
+            
+            /*
+            =========================================================
+            CACHE
+            =========================================================
+            */
+
+            cache: {
+                enabled: config.cache?.enabled ?? true,
+                duration: config.cache?.duration ?? 300000
+            },
             /*
             =========================================================
             MOBILE
@@ -133,7 +171,9 @@ class CCPopupInstance {
                 config.footerClosePopupButton ?? false,
     
             footerClosePopupButtonText:
-                config.footerClosePopupButtonText ?? "Close"
+                config.footerClosePopupButtonText ?? "Close",
+
+
         };
     
         /*
@@ -607,6 +647,19 @@ class CCPopupInstance {
         const content = this.getContentEl();
         if (!content) return;
 
+
+        if (this.footerButton) {
+            this.footerButton.style.display = "none";
+        }
+
+        if (this.formContainer) {
+            this.formContainer.style.height = "auto";
+        }
+
+        if (this.modalContent) {
+            this.modalContent.style.height = "auto";
+        }
+
         const duration = this.config.animation?.duration || 400;
 
         if (this.config.animation?.enabled &&
@@ -882,8 +935,8 @@ class CCPopupInstance {
               height: 30px;
               background: transparent;
               border: none;
-              margin-top: -25;
-              margin-bottom: 10;
+              margin-top: -25px;
+              margin-bottom: 10px;
               font-size: 16px;
               color: ${this.config.styles.footerClosePopupButtonTextColor};
 
@@ -905,10 +958,14 @@ class CCPopupInstance {
       */
   
       renderDesktop() {
-    
+
         const cfg = this.config;
 
         const modal = document.createElement("div");
+
+        this.formContainer = modal.querySelector(`#cc-form-${cfg.id}`);
+        this.modalContent = modal.querySelector(".cc-modal-content");
+        this.footerButton = modal.querySelector(".footerClosePopupBtn");
 
         modal.className = "cc-modal";
 
@@ -1028,6 +1085,7 @@ class CCPopupInstance {
         modal.querySelector(".footerClosePopupBtn").onclick=
             () => this.close();
 
+
         modal.onclick = (e) => {
 
             if (e.target === modal) {
@@ -1124,7 +1182,7 @@ class CCPopupInstance {
                 &times;
                 </span>
 
-                <div id="cc-form-${cfg.id}"></div>
+                <div id="cc-form-${cfg.id}">
 
                 ${cfg.footerClosePopupButton ? `
                 <button
@@ -1164,27 +1222,109 @@ class CCPopupInstance {
 
         async fetchConfig(popupId) {
 
+            const cacheKey = `ccpopup_${popupId}`;
+        
+            // -----------------------------------------------------
+            // Check session cache
+            // -----------------------------------------------------
+        
+            const cached = sessionStorage.getItem(cacheKey);
+        
+            if (cached) {
+        
+                try {
+        
+                    const cache = JSON.parse(cached);
+        
+                    if (cache.enabled) {
+        
+                        const age = Date.now() - cache.timestamp;
+        
+                        if (age < cache.duration) {
+        
+                            console.log("Loaded popup from session cache");
+        
+                            return cache.config;
+        
+                        }
+        
+                        console.log("Popup cache expired");
+        
+                    }
+        
+                    sessionStorage.removeItem(cacheKey);
+        
+                } catch (err) {
+        
+                    console.warn("Invalid popup cache. Clearing.", err);
+        
+                    sessionStorage.removeItem(cacheKey);
+        
+                }
+        
+            }
+        
+            // -----------------------------------------------------
+            // Fetch from Supabase
+            // -----------------------------------------------------
+        
+            console.log("Fetching popup from Supabase...");
+        
             const response = await fetch(
-                `https://cznzuqceeqgqytzpimvy.supabase.co/rest/v1/popup?select=*`,
+                `https://cznzuqceeqgqytzpimvy.supabase.co/rest/v1/popup?popup_id=eq.${popupId}&select=config,domains`,
                 {
                     headers: {
-                        apikey: 'sb_publishable_GoeP2Tly0Jl55vY6d258cQ_kf3st7XN',
-                        Authorization: `Bearer ${'sb_publishable_GoeP2Tly0Jl55vY6d258cQ_kf3st7XN'}`
+                        apikey: "sb_publishable_GoeP2Tly0Jl55vY6d258cQ_kf3st7XN",
+                        Authorization: `Bearer ${"sb_publishable_GoeP2Tly0Jl55vY6d258cQ_kf3st7XN"}`
                     }
                 }
             );
-
+        
             if (!response.ok) {
                 throw new Error(`Supabase error: ${response.status}`);
             }
-
+        
             const rows = await response.json();
 
             if (!rows.length) {
                 throw new Error(`Popup '${popupId}' not found.`);
             }
 
-            return rows[0].config;
+            const row = rows[0];
+
+            const config = row.config;
+            const domains = row.domains || [];
+
+            const host = window.location.hostname || "localhost";
+
+            if (!domainAllowed(host, domains)) {
+                throw new Error(
+                    `Popup '${popupId}' is not authorized for '${host}'.`
+                );
+            }
+        
+            // -----------------------------------------------------
+            // Cache if enabled
+            // -----------------------------------------------------
+        
+            const cacheSettings = config.cache || {};
+        
+            if (cacheSettings.enabled) {
+        
+                sessionStorage.setItem(
+                    cacheKey,
+                    JSON.stringify({
+                        timestamp: Date.now(),
+                        duration: cacheSettings.duration ?? 60000,
+                        enabled: true,
+                        config
+                    })
+                );
+        
+            }
+        
+            return config;
+        
         },
 
         async init(config) {
