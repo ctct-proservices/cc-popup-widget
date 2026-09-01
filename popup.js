@@ -296,7 +296,7 @@ class CCPopupInstance {
                 location.protocol === "file:" ||
                 location.hostname === "localhost" ||
                 location.hostname === "127.0.0.1" ||
-                location.hostname === "page.services"
+                location.hostname === "pages.services"
             ) {
 
                 console.log("CCPopup: Debug consent mode enabled.");
