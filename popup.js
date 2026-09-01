@@ -55,7 +55,11 @@ class CCPopupInstance {
     
         this.modal = null;
         this.contentEl = null;
-    
+        
+        this.formReady = false;
+        this.animationStarted = false;
+        this.animationFallback = null;
+
         this.isAnimating = false;
         this.animationState = "idle";
     
@@ -63,10 +67,20 @@ class CCPopupInstance {
         this.resizeBound = false;
     
         this.lastIsMobile = this.isMobile?.() ?? false;
+        
+        this.consentGranted = false;
+    
+        this.handleFormMessage = this.handleFormMessage.bind(this);
+
+        if (config.type === "sticky") {
+            this.displayState = "collapsed";
+        } else {
+            this.displayState = "hidden";
+        }
     
         /*
         =========================================================
-        RAW CONFIG BUILD
+        RAW CONFIG BUILD FROM SUPABASE
         =========================================================
         */
     
@@ -75,10 +89,14 @@ class CCPopupInstance {
             id: config.id || `cc_${Math.random().toString(36).slice(2)}`,
     
             mobile: config.mobile ?? true,
+
+            type: config.type ?? "modal",
     
             crossTabSessionLock: config.crossTabSessionLock ?? true,
     
             widthType: config.widthType || "fixed",
+
+            sticky: config.sticky || {},
     
             /*
             =========================================================
@@ -160,7 +178,28 @@ class CCPopupInstance {
             */
     
             form: config.form || {},
-    
+            
+           /*
+            =========================================================
+            FORM SUCCESS BUTTON
+            =========================================================
+            */
+
+            successButtonText: config.successButtonText ?? "Close",
+
+            successButtonStyles: config.successButtonStyles || {},
+
+            /*
+            =========================================================
+            CONSENT
+            =========================================================
+            */
+
+            consent: {
+                provider: config.consent?.provider || "",
+                required: config.consent?.required ?? false,
+                requiredGroups: config.consent?.requiredGroups || []
+            },
             /*
             =========================================================
             FOOTER
@@ -189,6 +228,7 @@ class CCPopupInstance {
             mobileFormID: config.form?.mobileFormID || config.formConfig?.mobileFormID || "",
             domain: config.form?.domain || config.formConfig?.domain || "",
             formScriptUrl: config.form?.formScriptUrl || config.formConfig?.formScriptUrl || "",
+            subDomain: config.form?.subDomain || config.formConfig?.subDomain || "",
             width: config.form?.width || config.formConfig?.width || "100%",
             hidden: config.form?.hidden || config.formConfig?.hidden || {}
         };
@@ -224,6 +264,779 @@ class CCPopupInstance {
             animateOnClose: rawAnimation.animateOnClose ?? true
         };
     }
+
+    waitForConsent(callback) {
+
+            console.log("waitForConsent initialized", this.config.id);
+
+
+            // -------------------------------------------------
+            // Listen for consent event FIRST
+            // -------------------------------------------------
+
+            window.addEventListener(
+                "ccConsentGranted",
+                () => {
+
+                    console.log("CCPopup: Consent received.");
+
+                    if (typeof callback === "function") {
+                        callback();
+                    }
+
+                },
+                { once: true }
+            );
+
+            // -------------------------------------------------
+            // Local Development
+            // -------------------------------------------------
+
+            if (
+                location.protocol === "file:" ||
+                location.hostname === "localhost" ||
+                location.hostname === "127.0.0.1"
+            ) {
+
+                console.log("CCPopup: Debug consent mode enabled.");
+                    window.ccRemoveOneTrustConsent = () => {
+
+                document.cookie =
+                    "OptanonConsent=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/";
+
+                console.log(
+                    "CCPopup: Mock OneTrust cookie removed"
+                );
+
+            };
+            window.ccMockOneTrustConsent = () => {
+
+                window.ccMockConsentEnabled = true;
+
+                const value =
+                    "isGpcEnabled=0" +
+                    "&datestamp=Fri+Jul+24+2026+03%3A34%3A00+GMT-0700" +
+                    "&version=202605.1.0" +
+                    "&browserGpcFlag=0" +
+                    "&isIABGlobal=false" +
+                    "&hosts=" +
+                    "&landingPath=NotLandingPage" +
+                    "&groups=1%3A1%2C2%3A1%2C3%3A1%2C4%3A1%2C8%3A1";
+
+
+                    document.cookie =
+                    `OptanonConsent=${value}; path=/; max-age=31536000`;
+
+
+                    console.log(
+                        "CCPopup: Mock OneTrust cookie created"
+                    );
+
+
+                    window.dispatchEvent(
+                        new Event("OneTrustGroupsUpdated")
+                    );
+
+                };
+
+            window.ccSetMockConsent = (groups) => {
+
+                window.ccMockConsentEnabled = true;
+
+                const value =
+                    `isGpcEnabled=0&groups=${groups}`;
+
+
+                document.cookie =
+                    `OptanonConsent=${value}; path=/; max-age=31536000`;
+
+
+                console.log(
+                    "CCPopup: Mock consent set:",
+                    value
+                );
+
+
+                window.dispatchEvent(
+                    new Event("OneTrustGroupsUpdated")
+                );
+
+                };
+
+            }
+
+
+            // -------------------------------------------------
+            // Existing Consent Check
+            // -------------------------------------------------
+
+            if (this.hasRequiredConsent()) {
+
+                console.log("CCPopup: Existing consent detected.");
+
+                window.dispatchEvent(
+                    new Event("ccConsentGranted")
+                );
+
+            }
+
+
+            // -------------------------------------------------
+            // OneTrust Updates
+            // -------------------------------------------------
+
+            window.addEventListener(
+                "OneTrustGroupsUpdated",
+                () => {
+
+                    console.log("CCPopup: OneTrust update detected.");
+
+                    const consent = this.hasRequiredConsent();
+
+                    console.log(
+                        "CCPopup: hasRequiredConsent returned:",
+                        consent
+                    );
+
+                    if (consent) {
+
+                        window.dispatchEvent(
+                            new Event("ccConsentGranted")
+                        );
+
+                    }
+
+                }
+            );
+
+    }
+
+    hasRequiredConsent() {
+
+        // -------------------------------------------------
+        // Debug override
+        // -------------------------------------------------
+
+        if (sessionStorage.getItem("cc_debug_consent") === "true") {
+
+            console.log(
+                "CCPopup: Debug consent override enabled."
+            );
+
+            return true;
+        }
+
+
+        // -------------------------------------------------
+        // Local testing protection
+        // -------------------------------------------------
+
+        const isLocal =
+            location.protocol === "file:" ||
+            location.hostname === "localhost" ||
+            location.hostname === "127.0.0.1";
+
+
+        if (isLocal && !window.ccMockConsentEnabled) {
+
+            const hasMockConsentCookie =
+                document.cookie
+                    .split("; ")
+                    .some(c =>
+                        c.startsWith("OptanonConsent=")
+                    );
+
+            if (!hasMockConsentCookie) {
+
+                console.log(
+                    "CCPopup: Local environment, waiting for mock consent."
+                );
+
+                return false;
+
+            }
+
+            }
+
+
+        // -------------------------------------------------
+        // Required groups from config
+        // -------------------------------------------------
+
+        const required =
+            this.config.consent?.requiredGroups || [];
+
+
+        console.log(
+            "CCPopup: Required groups:",
+            required
+        );
+
+
+        // -------------------------------------------------
+        // Find OneTrust cookie
+        // -------------------------------------------------
+
+        const cookie =
+            document.cookie
+                .split("; ")
+                .find(c =>
+                    c.startsWith("OptanonConsent=")
+                );
+
+
+        if (!cookie) {
+
+            console.log(
+                "CCPopup: OptanonConsent cookie not found."
+            );
+
+            return false;
+        }
+
+
+        // -------------------------------------------------
+        // Decode cookie value
+        // -------------------------------------------------
+
+        let value =
+            cookie.substring(
+                cookie.indexOf("=") + 1
+            );
+
+
+        value =
+            decodeURIComponent(value);
+
+
+        console.log(
+            "CCPopup: Decoded consent cookie:",
+            value
+        );
+
+
+        // -------------------------------------------------
+        // Extract groups
+        // -------------------------------------------------
+
+        const match =
+            value.match(/groups=([^&]+)/);
+
+
+        if (!match) {
+
+            console.log(
+                "CCPopup: No groups found in consent cookie."
+            );
+
+            return false;
+        }
+
+
+        const groups =
+            decodeURIComponent(match[1]);
+
+
+        console.log(
+            "CCPopup: Consent groups string:",
+            groups
+        );
+
+
+        // -------------------------------------------------
+        // Convert groups into object
+        // Example:
+        // {
+        //   "1": true,
+        //   "2": true,
+        //   "3": false
+        // }
+        // -------------------------------------------------
+
+        const accepted = {};
+
+
+        groups
+            .split(",")
+            .forEach(group => {
+
+                console.log(
+                    "CCPopup: Parsing group:",
+                    group
+                );
+
+
+                const [
+                    id,
+                    enabled
+                ] = group.split(":");
+
+
+                accepted[id] =
+                    enabled === "1";
+
+            });
+
+
+        console.log(
+            "CCPopup: Parsed consent groups:",
+            accepted
+        );
+
+
+        // -------------------------------------------------
+        // Validate required groups
+        // -------------------------------------------------
+
+        const hasConsent =
+            required.every(
+                id => accepted[id]
+            );
+
+
+        console.log(
+            "CCPopup: hasRequiredConsent result:",
+            hasConsent
+        );
+
+
+        return hasConsent;
+
+        }
+
+        handleFormMessage(e) {
+
+
+
+            const expectedOrigin =
+        `${this.config.form?.subDomain}`.toLowerCase();
+
+    const expectedFormName =
+        this.config.form?.formName;
+
+
+    // -------------------------------------------------
+    // Validate origin
+    // -------------------------------------------------
+
+    if (e.origin.toLowerCase() !== expectedOrigin) {
+
+        console.log(
+            "CCPopup: Message rejected - origin mismatch",
+            {
+                expected: expectedOrigin,
+                received: e.origin
+            }
+        );
+
+        return;
+    }
+
+
+console.log(
+    "CCPopup: Origin validated"
+);
+
+
+// -------------------------------------------------
+// Validate message data
+// -------------------------------------------------
+
+if (!e.data) {
+
+    console.log(
+        "CCPopup: Message rejected - no data"
+    );
+
+    return;
+}
+
+
+// -------------------------------------------------
+// Only process form submissions
+// -------------------------------------------------
+
+if (e.data.action !== "formSubmitted") {
+
+    console.log(
+        "CCPopup: Ignoring message - action:",
+        e.data.action
+    );
+
+    return;
+}
+
+
+console.log(
+    "CCPopup: formSubmitted event detected"
+);
+
+
+// -------------------------------------------------
+// Validate form name
+// -------------------------------------------------
+
+console.log(
+    "CCPopup: Expected form name:",
+    expectedFormName
+);
+
+console.log(
+    "CCPopup: Received form name:",
+    e.data.formName
+);
+
+
+if (
+    expectedFormName &&
+    e.data.formName !== expectedFormName
+) {
+
+    console.log(
+        "CCPopup: Form name mismatch"
+    );
+
+    return;
+}
+
+
+console.log(
+    "CCPopup: Form name validated"
+);
+
+
+// -------------------------------------------------
+// Form submission received
+// -------------------------------------------------
+
+console.log(
+    "CCPopup: Form submitted"
+);
+
+console.log(
+    "Form name:",
+    e.data.formName
+);
+
+console.log(
+    "Form ID:",
+    e.data.formID
+);
+
+console.log(
+    "Form data:",
+    e.data.data
+);
+
+
+// -------------------------------------------------
+// Handle submission
+// -------------------------------------------------
+
+console.log(
+    "CCPopup: Calling handleFormSubmission()"
+);
+
+this.handleFormSubmission(e.data);
+
+}
+
+    bindFormSubmitListener() {
+
+        console.log(
+            "CCPopup: Binding form submit listener"
+        );
+    
+        window.addEventListener(
+            "message",
+            this.handleFormMessage
+        );
+    
+    }
+
+    unbindFormSubmitListener() {
+
+        window.removeEventListener(
+            "message",
+            this.handleFormMessage
+        );
+    
+    }
+
+
+
+    getFormSubmittedKey() {
+        return `cc_popup_form_submitted_${this.config.id}`;
+    }
+
+    hasFormBeenSubmitted() {
+
+        return localStorage.getItem(
+            this.getFormSubmittedKey()
+        ) === "true";
+
+    }
+
+    handleFormSubmission(data) {
+
+        console.log(
+        "CCPopup: Processing form submission",
+        data
+        );
+
+        // Remember that this popup's form was submitted
+        localStorage.setItem(
+            this.getFormSubmittedKey(),
+            "true"
+        );
+
+        console.log(
+            "CCPopup: Form submission saved"
+        );
+
+        const styles =
+            this.config.successButtonStyles || {};
+            console.log(
+            "CCPopup: Success styles:",
+            styles
+        );
+
+        // -------------------------------------------------
+        // Resize iframe
+        // -------------------------------------------------
+
+        if (styles.resizeIframe) {
+
+            const iframe =
+            this.modal?.querySelector(
+                `#cc-form-${this.config.id} > iframe`
+            );
+
+        if (iframe) {
+
+            // Resize iframe if configured
+            if (styles.resizeIframe && styles.resizedIframeHeight) {
+
+                iframe.style.height =
+                    styles.resizedIframeHeight;
+
+                console.log(
+                    "CCPopup: Success iframe height set to",
+                    styles.resizedIframeHeight
+                );
+            }
+
+            // Center iframe within form container
+            const formContainer =
+                this.modal?.querySelector(
+                    `#cc-form-${this.config.id}`
+                );
+
+            if (formContainer) {
+
+                formContainer.style.display = "flex";
+                formContainer.style.justifyContent = "center";
+                formContainer.style.alignItems = "center";
+                formContainer.style.width = styles.resizeFormWidth || "100%";
+                formContainer.style.height = "100%";
+
+                iframe.style.display = "block";
+                iframe.style.margin = "0 auto";
+            }
+
+        }
+        }
+
+
+// -------------------------------------------------
+// Hide logo
+// -------------------------------------------------
+
+if (styles.hideLogo) {
+
+    const logo =
+        this.modal?.querySelector(
+            ".cc-popup-logo"
+        );
+
+    if (logo) {
+
+        logo.style.display = "none";
+
+        console.log(
+            "CCPopup: Success logo hidden."
+        );
+
+    } else {
+
+        console.warn(
+            "CCPopup: Logo element not found."
+        );
+
+    }
+
+}
+
+
+// -------------------------------------------------
+// Resize form width
+// -------------------------------------------------
+
+if (styles.resizeForm) {
+console.log("test");
+    const formContainer =
+        this.modal?.querySelector(
+            `#cc-form-${this.config.id}`
+        );
+
+    if (formContainer) {
+
+        const width =
+            styles.resizeFormWidth || "100%";
+
+        formContainer.style.width =
+            width;
+
+        console.log(
+            "CCPopup: Resized form container",
+            {
+                width: width
+            }
+        );
+
+    } else {
+
+        console.warn(
+            "CCPopup: Form container not found."
+        );
+
+    }
+
+}
+
+
+
+        // -------------------------------------------------
+        // Find success close button
+        // -------------------------------------------------
+
+        const button =
+            this.modal?.querySelector(
+                ".cc-popup-success-close"
+            );
+        const closePopupFooterBtn = 
+            this.modal?.querySelector(
+                ".footerClosePopupBtn"
+            );
+        const buttonContainer = 
+            this.modal?.querySelector(
+                ".cc-popup-success"
+            );
+
+        const ccRight = 
+            this.modal?.querySelector(
+                ".cc-right"
+            );
+        
+        if (!closePopupFooterBtn) {
+
+            console.warn(
+                "CCPopup: Closes popup footer button not found."
+            );
+
+            return;
+        }
+
+        if (!button) {
+
+            console.warn(
+                "CCPopup: Success close button not found."
+            );
+
+            return;
+        }
+
+
+        // -------------------------------------------------
+        // Apply button CSS styles
+        // -------------------------------------------------
+
+        Object.entries(styles).forEach(
+            ([property, value]) => {
+
+                // Don't try to apply configuration
+                // properties as CSS properties.
+
+                if (
+                    property === "hideLogo" ||
+                    property === "resizeIframe" ||
+                    property === "resizedIframeHeight"
+                ) {
+                    return;
+                }
+
+                button.style.setProperty(
+                    property,
+                    value
+                );
+
+            }
+        );
+        
+        // -------------------------------------------------
+        // SHOW BUTTON CONTAINER
+        // -------------------------------------------------
+
+        buttonContainer.style.display = "flex";
+
+        // -------------------------------------------------
+        // Button text
+        // -------------------------------------------------
+
+        button.textContent =
+            this.config.successButtonText || "Close";
+
+        //--------------------------------------------------
+        // HIDE FOOTER CLOSE BUTTON
+        // ------------------------------------------------
+
+        closePopupFooterBtn.style.display = "none";
+
+        ccRight.style.minHeight = "0";
+        ccRight.style.height = "auto";
+        
+        document.querySelector(`#cc-form-${this.config.id}`).style.minHeight = "0";
+        document.querySelector(`#cc-form-${this.config.id}`).style.height = "auto";
+
+
+        // -------------------------------------------------
+        // Show button
+        // -------------------------------------------------
+
+        button.style.display =
+            styles.display || "block";
+
+
+        // -------------------------------------------------
+        // Close popup
+        // -------------------------------------------------
+
+        button.onclick = () => {
+
+            console.log(
+                "CCPopup: Success close button clicked."
+            );
+
+            this.close();
+
+        };
+
+
+        console.log(
+            "CCPopup: Success state displayed."
+        );
+
+        }
 
     getAnimationClass() {
         const type = this.config.animation?.enter ?? "fade";
@@ -459,26 +1272,119 @@ class CCPopupInstance {
 
     init() {
 
+        console.log("CCPopup: init() called");
+    
         const boot = () => {
-
-        //  ADD THIS GUARD
-        if (!this.config.mobile && this.isMobile()) {
-            return;
-        }
-
+    
+            console.log("CCPopup: BOOT");
+    
+            if (!this.config.mobile && this.isMobile()) {
+    
+                console.log(
+                    "CCPopup: Skipping mobile device"
+                );
+    
+                return;
+            }
+    
             this.injectStyles?.();
             this.injectAnimationStyles?.();
+    
+            console.log(
+                "CCPopup: Consent required:",
+                this.config.consent?.required
+            );
+            
+            // FORM SUBMISSION CHECK
 
-            this.mount();
-            this.bindEvents();
-            this.bindResponsiveWatcher?.();
-            };
+            if (
+                this.config.type === "sticky" &&
+                this.hasFormBeenSubmitted()
+            ) {
 
+                console.log(
+                    "CCPopup: Sticky form already submitted - skipping mount."
+                );
+
+                return;
+            }
+
+
+            // CONSENT CHECK
+
+            if (this.config.consent?.required) {
+    
+                console.log(
+                    "CCPopup: Calling waitForConsent()"
+                );
+    
+                this.waitForConsent(() => {
+
+                    console.log(
+                        "CCPopup: Consent granted."
+                    );
+
+                    const delay =
+                        this.config.trigger?.delayAfterConsent ?? 5000;
+
+                    console.log(
+                        `CCPopup: Waiting ${delay}ms before mounting popup.`
+                    );
+
+                    setTimeout(() => {
+
+                        if (
+                            this.config.type === "sticky" &&
+                            this.hasFormBeenSubmitted()
+                        ) {
+
+                            console.log(
+                                "CCPopup: Sticky form already submitted - skipping mount."
+                            );
+
+                            return;
+                        }
+
+                        console.log(
+                            "CCPopup: Consent delay complete - mounting popup."
+                        );
+
+                        this.mount();
+                        this.bindEvents();
+
+                    }, delay);
+
+                    });
+    
+            } else {
+    
+                this.mount();
+                this.bindEvents();
+        
+            }
+    
+                this.bindResponsiveWatcher?.();
+    
+        };
+    
+    
         if (document.readyState === "loading") {
-            document.addEventListener("DOMContentLoaded", boot);
+    
+            console.log(
+                "CCPopup: Waiting for DOMContentLoaded"
+            );
+    
+            document.addEventListener(
+                "DOMContentLoaded",
+                boot
+            );
+    
         } else {
+    
             boot();
+    
         }
+    
     }
 
     /*
@@ -487,25 +1393,39 @@ class CCPopupInstance {
     =========================================================
     */
 
-    mount() {
+        mount() {
 
-        this.modal = this.isMobile()
-            ? this.renderMobile()
-            : this.renderDesktop();
 
-        document.body.appendChild(this.modal);
+            switch (this.config.type) {
 
-        this.loadForm();
-    }
+                case "sticky":
+                    this.modal = this.renderSticky();
+                    break;
 
-    unmount() {
+                case "modal":
+                default:
+                    this.modal = this.isMobile()
+                        ? this.renderMobile()
+                        : this.renderDesktop();
+                    break;
+            }
 
-        if (!this.modal) return;
+            document.body.appendChild(this.modal);
 
-        this.modal.remove();
-        this.modal = null;
-        this.contentEl = null;
-    }
+            this.loadForm();
+
+        }
+
+        unmount() {
+
+            this.unbindFormSubmitListener();
+
+            if (!this.modal) return;
+
+            this.modal.remove();
+            this.modal = null;
+            this.contentEl = null;
+        }
 
     /*
     =========================================================
@@ -541,11 +1461,20 @@ class CCPopupInstance {
     */
 
     show() {
-       
+
         if (this.isBusy()) return;
         if (!this.modal) return;
         if (this.isClosed()) return;
         if (!this.claimTabLock()) return;
+
+        if (this.hasFormBeenSubmitted()) {
+
+            console.log(
+                "CCPopup: Form already submitted - sticky popup will not appear."
+            );
+
+            return;
+        }
 
         this.session.activeInstance = this;
         this.session.shown = true;
@@ -556,15 +1485,19 @@ class CCPopupInstance {
         this.modal.style.display = "block";
         this.onShow?.();
 
-        const duration = this.config.animation?.duration || 400;
-        const easing = this.config.animation?.easing || "ease";
-
-        const animationEnabled = this.config.animation?.enabled;
+        // Reset animation state
+        this.formReady = false;
+        this.animationStarted = false;
 
         const enterTransform =
-            this.getAnimationTransform?.(this.config.animation?.enter);
+            this.getAnimationTransform?.(
+                this.config.animation?.enter
+            );
 
-        // 1. initial state
+        // -------------------------------------------------
+        // Prepare initial animation state
+        // -------------------------------------------------
+
         content.style.transition = "none";
 
         if (enterTransform) {
@@ -573,9 +1506,164 @@ class CCPopupInstance {
 
         content.style.opacity = "0";
 
-       
+        // -------------------------------------------------
+        // Fallback if form never reports its height
+        // -------------------------------------------------
 
-        // 3. animation pipeline
+        this.animationFallback = setTimeout(() => {
+
+            if (!this.animationStarted) {
+
+                console.warn(
+                    "CCPopup: Form resize not received. Starting animation fallback."
+                );
+
+                this.startPopupAnimation();
+
+            }
+
+        }, 2000);
+
+        }
+
+        async loadForm(options = {}) {
+
+            const force = options.force || false;
+
+            const isMobile = this.isMobile();
+
+            if (
+                !force &&
+                this.formLoaded &&
+                this.loadedFormMode ===
+                    (isMobile ? "mobile" : "desktop")
+            ) {
+                return;
+            }
+
+            this.loadedFormMode =
+                isMobile ? "mobile" : "desktop";
+
+            this.formLoaded = true;
+
+            const cfg = this.config;
+
+            const container =
+                document.getElementById(
+                    `cc-form-${cfg.id}`
+                );
+
+            if (!container) {
+                return;
+            }
+
+            container.innerHTML = "";
+
+            const form =
+                cfg.form || cfg.formConfig;
+
+            if (!form) {
+                return;
+            }
+
+            window.ss_form = {
+
+                account: form.account,
+
+                formID:
+                    isMobile && form.mobileFormID
+                        ? form.mobileFormID
+                        : form.formID,
+
+                target_id:
+                    `cc-form-${cfg.id}`,
+
+                width:
+                    form.width || "100%",
+
+                domain:
+                    form.domain,
+
+                hidden:
+                    form.hidden || undefined
+            };
+
+            const script =
+                document.createElement("script");
+
+            script.src =
+                form.formScriptUrl +
+                "&t=" +
+                Date.now();
+
+            script.async = true;
+
+            container.appendChild(script);
+
+            // Wait for iframe to appear
+            await new Promise(resolve => {
+
+                const checkIframe = () => {
+
+                    const iframe =
+                        container.querySelector("iframe");
+
+                    if (iframe) {
+
+                        console.log(
+                            "CCPopup: Sticky form iframe ready"
+                        );
+
+                        resolve();
+
+                    } else {
+
+                        requestAnimationFrame(
+                            checkIframe
+                        );
+
+                    }
+
+                };
+
+                checkIframe();
+
+            });
+            }
+    /*
+    ==========================
+    ANIMATION
+    ==========================
+    */
+
+    startPopupAnimation() {
+
+        if (this.animationStarted) {
+            return;
+        }
+
+        this.animationStarted = true;
+
+        if (this.animationFallback) {
+
+            clearTimeout(this.animationFallback);
+
+            this.animationFallback = null;
+
+        }
+
+        const content = this.getContentEl();
+
+        if (!content) {
+            return;
+        }
+
+        const duration =
+            this.config.animation?.duration || 400;
+
+        const easing =
+            this.config.animation?.easing || "ease";
+
         requestAnimationFrame(() => {
 
             requestAnimationFrame(() => {
@@ -583,54 +1671,15 @@ class CCPopupInstance {
                 content.style.transition =
                     `transform ${duration}ms ${easing}, opacity ${duration}ms ${easing}`;
 
-                content.style.transform = "translate(0,0) scale(1)";
+                content.style.transform =
+                    "translate(0,0) scale(1)";
+
                 content.style.opacity = "1";
+
             });
 
         });
-        }
 
-        loadForm(options = {}) {
-
-        const force = options.force || false;
-
-        const isMobile = this.isMobile();
-
-        if (
-            !force &&
-            this.formLoaded &&
-            this.loadedFormMode === (isMobile ? "mobile" : "desktop")
-        ) {
-            return;
-        }
-
-        this.loadedFormMode = isMobile ? "mobile" : "desktop";
-        this.formLoaded = true;
-
-        const cfg = this.config;
-
-        const container = document.getElementById(`cc-form-${cfg.id}`);
-        if (!container) return;
-
-        container.innerHTML = "";
-
-        const form = cfg.form || cfg.formConfig;
-        if (!form) return;
-
-        window.ss_form = {
-            account: form.account,
-            formID: cfg.isMobile?.() && form.mobileFormID ? form.mobileFormID : form.formID,
-            target_id: `cc-form-${cfg.id}`,
-            width: form.width || "100%",
-            domain: form.domain,
-            hidden: form.hidden || undefined
-        };
-
-        const script = document.createElement("script");
-        script.src = form.formScriptUrl + "&t=" + Date.now();
-        script.async = true;
-
-        container.appendChild(script);
         }
 
     /*
@@ -639,7 +1688,28 @@ class CCPopupInstance {
     =========================================================
     */
 
+    hideSubmittedSticky() {
+
+        if (this.modal) {
+            this.modal.style.display = "none";
+        }
+
+        console.log(
+            "CCPopup: Submitted sticky form - hiding sticky footer."
+        );
+
+    }
+    
     close() {
+
+        if (
+            this.config.type === "sticky" &&
+            this.hasFormBeenSubmitted()
+            ) {
+
+                this.hideSubmittedSticky();
+                return;
+        }
 
         if (this.isBusy()) return;
         if (!this.modal) return;
@@ -722,44 +1792,223 @@ class CCPopupInstance {
     =========================================================
     */
 
-    bindEvents() {
-        
-        const trigger = this.config.trigger;
+    
+        bindEvents() {
 
-        if (trigger.type === "delay") {
+            console.log("CCPopup: bindEvents() called");
 
-            setTimeout(() => this.show(), trigger.delay);
-        }
+            this.bindFormSubmitListener();
 
-        if (trigger.type === "click") {
+            console.log("CCPopup: form listener bound");
 
-            document.addEventListener("click", (e) => {
+            const trigger = this.config.trigger;
 
-                if (e.target.closest(trigger.selector)) {
+
+            // -------------------------------------------------
+            // DELAY TRIGGER
+            // -------------------------------------------------
+
+            if (trigger.type === "delay") {
+
+                setTimeout(() => {
+
+                    if (
+                        !this.config.consent?.required ||
+                        this.hasRequiredConsent()
+                    ) {
+
+                        this.show();
+
+                    } else {
+
+                        console.log(
+                            "CCPopup: Delay trigger blocked - waiting for consent."
+                        );
+
+                        this.waitForConsent(
+                            () => this.show()
+                        );
+
+                    }
+
+                }, trigger.delay);
+
+            }
+
+
+            // -------------------------------------------------
+            // COOKIE CONSENT TRIGGER
+            // -------------------------------------------------
+
+            if (trigger.type === "cookieConsent") {
+
+                this.waitForConsent(() => {
+
+                    console.log(
+                        "CCPopup: Consent granted. Starting 5 second delay."
+                    );
+                
+
+                    if (this.hasFormBeenSubmitted()) {
+
+                        console.log(
+                            "CCPopup: Form already submitted. Sticky footer will not show."
+                        );
+
+                        return;
+                    }
+
+                    console.log(
+                        "CCPopup: Consent delay complete. Showing sticky footer."
+                    );
+
                     this.show();
-                }
-            });
+
+                });
+
+            }
+
+
+            // -------------------------------------------------
+            // CLICK / ELEMENT TRIGGER
+            // -------------------------------------------------
+
+            if (
+                trigger.type === "click" ||
+                trigger.type === "element"
+            ) {
+
+                document.addEventListener(
+                    "click",
+                    (e) => {
+
+                        const target =
+                            e.target.closest(
+                                trigger.selector
+                            );
+
+                        if (!target) {
+                            return;
+                        }
+
+
+                        console.log(
+                            "CCPopup: Element trigger clicked:",
+                            trigger.selector
+                        );
+
+
+                        // -----------------------------------------
+                        // No consent required
+                        // -----------------------------------------
+
+                        if (!this.config.consent?.required) {
+
+                            this.show();
+
+                            return;
+                        }
+
+
+                        // -----------------------------------------
+                        // Consent already exists
+                        // -----------------------------------------
+
+                        if (this.hasRequiredConsent()) {
+
+                            console.log(
+                                "CCPopup: Existing consent detected."
+                            );
+
+                            this.show();
+
+                            return;
+                        }
+
+
+                        // -----------------------------------------
+                        // Wait for consent
+                        // -----------------------------------------
+
+                        console.log(
+                            "CCPopup: Click blocked - waiting for consent."
+                        );
+
+                        this.waitForConsent(
+                            () => this.show()
+                        );
+
+                    }
+                );
+
+            }
+
+
+            // -------------------------------------------------
+            // EXIT INTENT TRIGGER
+            // -------------------------------------------------
+
+            if (trigger.type === "exit") {
+
+                let engaged = false;
+                let enabled = false;
+
+                document.addEventListener(
+                    "mousemove",
+                    () => engaged = true,
+                    { once: true }
+                );
+
+                setTimeout(
+                    () => enabled = true,
+                    trigger.exitIntentDelay
+                );
+
+                document.addEventListener(
+                    "mouseout",
+                    (e) => {
+
+                        if (this.session.shown) return;
+                        if (!engaged || !enabled) return;
+                        if (e.clientY > 10) return;
+
+
+                        // -----------------------------------------
+                        // No consent required
+                        // -----------------------------------------
+
+                        if (!this.config.consent?.required) {
+
+                            this.show();
+
+                            return;
+                        }
+
+
+                        // -----------------------------------------
+                        // Existing consent
+                        // -----------------------------------------
+
+                        if (this.hasRequiredConsent()) {
+
+                            this.show();
+
+                            return;
+                        }
+
+
+                        console.log(
+                            "CCPopup: Exit trigger blocked - consent not granted."
+                        );
+
+                    }
+                );
+
+            }
+
         }
 
-        if (trigger.type === "exit") {
 
-            let engaged = false;
-            let enabled = false;
-
-            document.addEventListener("mousemove", () => engaged = true, { once: true });
-
-            setTimeout(() => enabled = true, trigger.exitIntentDelay);
-
-            document.addEventListener("mouseout", (e) => {
-
-                if (this.session.shown) return;
-                if (!engaged || !enabled) return;
-                if (e.clientY > 10) return;
-
-                this.show();
-            });
-        }
-    }
 
     /*
     =========================================================
@@ -808,6 +2057,54 @@ class CCPopupInstance {
             this.show();
         }
     }
+
+    /*
+    ==========================================================
+    STICKY EXPAND/COLLAPSE
+    ==========================================================
+    */
+
+        expand() {
+
+            if (this.displayState === "expanded") return;
+
+            this.displayState = "expanded";
+
+            const collapsed = this.modal.querySelector(".cc-sticky-collapsed");
+            const expanded = this.modal.querySelector(".cc-sticky-expanded");
+
+            collapsed.classList.add("cc-hidden");
+            expanded.classList.remove("cc-hidden");
+            expanded.classList.add("cc-visible");
+
+        }
+
+        collapse() {
+
+            if (
+                this.config.type === "sticky" &&
+                this.hasFormBeenSubmitted()
+                ) {
+
+                    this.hideSubmittedSticky();
+                    return;
+            }
+
+            if (this.displayState === "collapsed") return;
+
+            this.displayState = "collapsed";
+
+            const collapsed = this.modal.querySelector(".cc-sticky-collapsed");
+            const expanded = this.modal.querySelector(".cc-sticky-expanded");
+
+            expanded.classList.remove("cc-visible");
+            expanded.classList.add("cc-hidden");
+
+            collapsed.classList.remove("cc-hidden");
+            collapsed.classList.add("cc-visible");
+
+        }
+
   
       /*
       =========================================================
@@ -815,141 +2112,371 @@ class CCPopupInstance {
       =========================================================
       */
   
-      injectStyles() {
-          
+      
+        injectStyles() {
 
-        const styleId = `cc-style-${this.config.id}`;
-        if (document.getElementById(styleId)) return;
-  
-        const style = document.createElement("style");
-        style.id = styleId;
+            const styleId = `cc-style-${this.config.id}`;
 
-        let position = "relative";
-          
-        if (this.config.layout.position === "center") {
-            position = "position:relative;";
-        }
+            if (document.getElementById(styleId)) return;
 
-        if (this.config.layout.position === "right") {
-            position = "position:fixed;right:0";
-        }
+            const style = document.createElement("style");
 
-        if (this.config.layout.position === "left") {
-            position = "position:fixed;left:0";
-        }
+            style.id = styleId;
 
-        style.innerHTML = `
-        .cc-modal-content {
-            will-change: transform, opacity;
-            transform: translateZ(0);
-        }
-          .cc-animation-visible {
-              opacity:1;
-              transform:none;
-          }
 
-          .cc-slide-right {
-              opacity:0;
-              transform:translateX(100%);
-          }
+            /* -------------------------------------------------
+            // POPUP POSITIONING
+            ------------------------------------------------- */
 
-          .cc-slide-left {
-              opacity:0;
-              transform:translateX(-100%);
-          }
+            let position = `
+                position:absolute;
+                top:50%;
+                left:50%;
+                transform:translate(-50%, -50%);
+            `;
 
-          .cc-slide-up {
-              opacity:0;
-              transform:translateY(100%);
-          }
 
-          
+            if (this.config.layout.position === "center") {
 
-          .cc-slide-right-enter {
-            transform: translateX(100%);
-            opacity: 0;
-        }
+                position = `
+                    position:absolute;
+                    top:50%;
+                    left:50%;
+                    transform:translate(-50%, -50%);
+                `;
 
-        .cc-slide-right-enter-active {
-            transform: translateX(0);
-            opacity: 1;
-            transition: all 400ms ease;
-        }
-
-        .cc-slide-right-exit {
-            transform: translateX(0);
-            opacity: 1;
-        }
-
-        .cc-slide-right-exit-active {
-            transform: translateX(100%);
-            opacity: 0;
-            transition: all 400ms ease;
-        }
-
-          .cc-slide-down {
-              opacity:0;
-              transform:translateY(-100%);
-          }
-
-          .cc-fade {
-              opacity:0;
-          }
-
-          .cc-zoom {
-              opacity:0;
-              transform:scale(.8);
-          }
-          
-
-            .cc-animation-visible {
-                opacity: 1;
-                transform: translate(0,0) scale(1);
             }
-          .cc-modal {
-            display:none;
-            position:fixed;
-            inset:0;
-            z-index:99999;
-          }
 
-          
-          .cc-modal-content { ${position} }
-          .cc-close {
-            position:absolute;
-            top:10px;
-            right:15px;
-            font-size:30px;
-            cursor:pointer;
-            z-index:10;
-          }
-          .cc-left img {
-            width:100%;
-            height:100%;
-            object-fit:cover;
-            display:block;
-          }
 
-          .footerClosePopupBtn {
-              width: 100%;
-              height: 30px;
-              background: transparent;
-              border: none;
-              margin-top: -25px;
-              margin-bottom: 10px;
-              font-size: 16px;
-              color: ${this.config.styles.footerClosePopupButtonTextColor};
+            if (this.config.layout.position === "right") {
 
-          }
-          .footerClosePopupBtn:hover {
-              width:100%;
-              color: ${this.config.styles.footerClosePopupButtonTextColorHover};
+                position = `
+                    position:absolute;
+                    top:50%;
+                    right:0;
+                    transform:translateY(-50%);
+                `;
 
-          }
-        `;
-  
-        document.head.appendChild(style);
-      }
+            }
+
+
+            if (this.config.layout.position === "left") {
+
+                position = `
+                    position:absolute;
+                    top:50%;
+                    left:0;
+                    transform:translateY(-50%);
+                `;
+
+            }
+
+
+            /* -------------------------------------------------
+            // BOTTOM LEFT
+             ------------------------------------------------- */
+
+            
+
+            if (this.config.layout.position === "bottom-left") {
+
+                position = `
+                    position:fixed;
+                    left:0px;
+                    bottom:0px;
+                    top:auto;
+                    right:auto;
+                    transform:none;
+                `;
+
+            }
+
+
+            /* -------------------------------------------------
+            // BOTTOM RIGHT
+             ------------------------------------------------- */
+
+            if (this.config.layout.position === "bottom-right") {
+
+                position = `
+                position:fixed;
+                    right:0px;
+                    bottom:0px;
+                    top:auto;
+                    left:auto;
+                    transform:none;
+                `;
+
+            }
+
+
+            style.innerHTML = `
+
+                .cc-modal-content {
+
+                    will-change: transform, opacity;
+                    transform: translateZ(0);
+
+                }
+
+
+                .cc-animation-visible {
+
+                    opacity:1;
+                    transform:none;
+
+                }
+
+
+                .cc-slide-right {
+
+                    opacity:0;
+                    transform:translateX(100%);
+
+                }
+
+
+                .cc-slide-left {
+
+                    opacity:0;
+                    transform:translateX(-100%);
+
+                }
+
+
+                .cc-slide-up {
+
+                    opacity:0;
+                    transform:translateY(100%);
+
+                }
+
+
+                .cc-slide-right-enter {
+
+                    transform:translateX(100%);
+                    opacity:0;
+
+                }
+
+
+                .cc-slide-right-enter-active {
+
+                    transform:translateX(0);
+                    opacity:1;
+                    transition:all 400ms ease;
+
+                }
+
+
+                .cc-slide-right-exit {
+
+                    transform:translateX(0);
+                    opacity:1;
+
+                }
+
+
+                .cc-slide-right-exit-active {
+
+                    transform:translateX(100%);
+                    opacity:0;
+                    transition:all 400ms ease;
+
+                }
+
+
+                .cc-slide-down {
+
+                    opacity:0;
+                    transform:translateY(-100%);
+
+                }
+
+
+                .cc-fade {
+
+                    opacity:0;
+
+                }
+
+
+                .cc-zoom {
+
+                    opacity:0;
+                    transform:scale(.8);
+
+                }
+
+
+                .cc-animation-visible {
+
+                    opacity:1;
+                    transform:translate(0,0) scale(1);
+
+                }
+
+
+                /* -------------------------------------------------
+                // MODAL
+                 ------------------------------------------------- */
+
+                .cc-modal {
+
+                    display:none;
+                    position:fixed;
+                    inset:0;
+                    z-index:99999;
+
+                }
+
+
+                /* -------------------------------------------------
+                // MODAL CONTENT
+                 ------------------------------------------------- */
+
+                .cc-modal-content {
+
+                    position:relative;
+                    will-change:transform, opacity;
+                }
+
+
+                /* -------------------------------------------------
+                // POPUP POSITION
+                 ------------------------------------------------- */
+
+                .cc-popup-position {
+                    ${position}
+                }
+
+
+                /* -------------------------------------------------
+                // CLOSE BUTTON
+                 ------------------------------------------------- */
+
+                .cc-close {
+
+                    position:absolute;
+                    right:15px;
+                    font-size:30px;
+                    cursor:pointer;
+                    z-index:10;
+
+                }
+
+
+                /* -------------------------------------------------
+                // IMAGES
+                 ------------------------------------------------- */
+
+                .cc-left img {
+
+                    width:100%;
+                    height:100%;
+                    object-fit:cover;
+                    display:block;
+
+                }
+
+
+                /* -------------------------------------------------
+                // FOOTER CLOSE BUTTON
+                 ------------------------------------------------- */
+
+                .footerClosePopupBtn {
+
+                    width:100%;
+                    height:30px;
+                    background:transparent;
+                    border:none;
+                    margin-top:-25px;
+                    margin-bottom:10px;
+                    font-size:16px;
+                    color:${this.config.styles.footerClosePopupButtonTextColor};
+
+                }
+
+
+                .footerClosePopupBtn:hover {
+
+                    width:100%;
+                    color:${this.config.styles.footerClosePopupButtonTextColorHover};
+
+                }
+
+
+                /* -------------------------------------------------
+                // STICKY
+                 ------------------------------------------------- */
+
+                .cc-sticky {
+
+                    position:fixed;
+                    bottom:0;
+                    left:0;
+                    right:0;
+
+                    display:flex;
+                    justify-content:center;
+
+                    z-index:9999;
+
+                }
+
+
+                .cc-sticky-expanded {
+
+                    position:relative;
+
+                }
+
+
+                .cc-sticky-form {
+
+                    width:${this.config.sticky.formWidth};
+
+                }
+
+
+                .cc-sticky-form-wrapper {
+
+                    width:100%;
+                    display:flex;
+                    justify-content:center;
+
+                }
+
+
+                .cc-sticky-expanded-show {
+
+                    display:block;
+                    height:${this.config.sticky.expandedHeight};
+
+                }
+
+
+                .cc-hidden {
+
+                    display:none !important;
+
+                }
+
+
+                .cc-visible {
+
+                    display:block;
+
+                }
+
+            `;
+
+
+            document.head.appendChild(style);
+
+        }
+
+
 
        /*
       =========================================================
@@ -1002,15 +2529,16 @@ class CCPopupInstance {
             `;
 
         modal.innerHTML = `
+        <div
+        class="cc-popup-position"
+        >
             <div
             class="cc-modal-content"
             style="
                 display:flex;
-
                 flex-direction:${flexDirection};
                 width:${cfg.layout.popupWidth || "600px"};
                 height:${cfg.layout.popupHeight || "500px"};
-                margin:10% auto;
                 border-radius:${cfg.styles.borderRadius || "12px"};
                 border: ${cfg.styles.popupBorder || "none"};
                 overflow:hidden;
@@ -1039,7 +2567,7 @@ class CCPopupInstance {
                     z-index:998;
                 "
                 >
-                <img src="${cfg.topImage}" style="width:${cfg.layout.topImageWidth || "200px"}; margin: 0 auto;"/>
+                <img src="${cfg.topImage}" class="cc-popup-logo" style="width:${cfg.layout.topImageWidth || "200px"}; margin: 0 auto;"/>
                 </div>
             ` : ""}
 
@@ -1057,6 +2585,7 @@ class CCPopupInstance {
                 class="cc-close"
                 style="
                     color:${cfg.styles.closeColor || "#fff"};
+                    font-size: ${cfg.styles.closeHeight || "20px"};
                     z-index:999;
                 "
                 >
@@ -1074,17 +2603,51 @@ class CCPopupInstance {
                         </button>
                     
                     ` : ""}
+
+                <div
+                        class="cc-popup-success"
+                        style="
+                            display: none;
+                            width: 100%;
+                            min-height:100px;
+                            justify-content: center;
+                            align-items: center;
+                            flex-direction: column;
+                            box-sizing: border-box;
+                        "
+                    >
+                        <button
+                            type="button"
+                            class="cc-popup-success-close"
+                        >
+                            Close
+                        </button>
+                </div>
             </div>
 
+            
+
+            </div>
             </div>
         `;
 
         modal.querySelector(".cc-close").onclick =
             () => this.close();
         
-            if (this.footerClosePopupButton) {
-                modal.querySelector(".footerClosePopupBtn").onclick=
-            () => this.close();
+            if (cfg.footerClosePopupButton) {
+
+            const footerButton =
+                modal.querySelector(".footerClosePopupBtn");
+
+            if (footerButton) {
+
+                footerButton.addEventListener(
+                    "click",
+                    () => this.close()
+                );
+
+            }
+
             }
 
 
@@ -1095,6 +2658,117 @@ class CCPopupInstance {
             }
         };
         
+        return modal;
+        }
+
+    /*
+    =========================================================
+    RENDER STICKY
+    =========================================================
+    */
+
+    renderSticky() {
+
+        const cfg = this.config;
+        const sticky = cfg.sticky || {};
+
+        const modal = document.createElement("div");
+        const modalCollapsed = document.querySelector(".cc-sticky-content");
+
+        modal.className = "cc-sticky";
+
+        modal.innerHTML = `
+            <div
+                class="cc-sticky-content cc-sticky-collapsed cc-visible"
+                style="
+                    width:${sticky.width || "800px"};
+                    height:${sticky.collapsedHeight || "70px"};
+                    overflow:hidden;
+                    background:${sticky.background || "#fff"};
+                    border:${sticky.borderWidth || "1px"} ${sticky.borderStyle || "solid"} ${sticky.borderColor || "#ccc"};
+                    border-radius:${sticky.borderRadius || "10px"};
+                    display: flex;
+                    align-items: center;
+                "
+            >
+                <div 
+                    class="cc-sticky-content-inner"
+                    style="display: flex; flex-direction: row; width: ${sticky.footerInnerWidth}; margin: 0 auto;justify-content: space-between;"
+                >
+                    <div
+                        class="cc-sticky-heading"
+                        style="
+                            font-size:${sticky.headlineFontSize};
+                            font-family:${sticky.fontFamily};
+                            color:${sticky.headlineColor};
+                            display:flex;
+                            align-items:center;
+                        
+                        "
+                    >
+                    ${sticky.headline}
+                    </div>
+                    <div class="cc-sticky-btn-wrapper"
+                        style="
+                        display: block;
+                        width: 250px;
+                        height: 40px;
+                        "
+                    >
+                        <button class="cc-sticky-btn"
+                            style="
+                            color:${sticky.buttonColor};
+                            border:${sticky.buttonBorder};
+                            background-color:${sticky.buttonBackground};
+                            width:100%;
+                            border-radius:${sticky.buttonBorderRadius};
+                            height:100%;
+                            font-size:${sticky.buttonFontSize};
+                            "
+                        >
+                        ${sticky.buttonText}
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="cc-sticky-expanded cc-hidden"
+                style="
+                    height:${sticky.expandedHeight};
+                    background-color:${sticky.background};
+                    border-radius:${sticky.borderRadius};
+                    width:${sticky.width || "800px"};
+                "
+            
+            >
+            <span
+                class="cc-close"
+                style="
+                    color:${cfg.styles.closeColor || "#fff"};
+                    font-size: ${cfg.styles.closeHeight || "20px"};
+                    z-index:999;
+                "
+                >
+                &times;
+                </span>
+
+                <div class="cc-sticky-form-wrapper">
+                     <div id="cc-form-${cfg.id}" class="cc-sticky-form" style="display:flex;justify-content: center;"></div>
+                </div>
+            </div>
+        `;
+
+        modal.querySelector(".cc-sticky-btn").onclick =
+        () => this.expand();
+
+        modal.querySelector(".cc-close").onclick =
+        () => this.collapse();
+
+        if (this.footerClosePopupButton) {
+            modal.querySelector(".footerClosePopupBtn").onclick=
+        () => this.close();
+        }
+
         return modal;
         }
 
@@ -1131,6 +2805,9 @@ class CCPopupInstance {
             `;
 
         modal.innerHTML = `
+            <div
+            class="cc-popup-position"
+            >
             <div
             class="cc-modal-content"
             style="
@@ -1179,6 +2856,8 @@ class CCPopupInstance {
                 class="cc-close"
                 style="
                     color:${cfg.styles.closeColor || "#fff"};
+                    font-size: ${cfg.styles.closeHeight || "20px"};
+                    z-index:999;
                 "
                 >
                 &times;
@@ -1205,6 +2884,22 @@ class CCPopupInstance {
         modal.querySelector(".cc-close").onclick =
             () => this.close();
 
+            if (cfg.footerClosePopupButton) {
+
+            const footerButton =
+                modal.querySelector(".footerClosePopupBtn");
+
+            if (footerButton) {
+
+                footerButton.addEventListener(
+                    "click",
+                    () => this.close()
+                );
+
+            }
+
+            }
+        
         modal.onclick = (e) => {
 
             if (e.target === modal) {
@@ -1265,7 +2960,7 @@ class CCPopupInstance {
                 }
         
             }
-        
+
             // -----------------------------------------------------
             // Fetch from Supabase
             // -----------------------------------------------------
